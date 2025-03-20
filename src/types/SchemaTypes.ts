@@ -4,7 +4,7 @@ import mongoose, {Document, ObjectId} from "mongoose";
 export interface IArticle extends Document {
 
     name: string;
-    contactNumber: string;
+    contactnumber: string;
     email: string;
     city: string;
     millage: string;
@@ -31,6 +31,8 @@ export interface IUser extends Document{
     fname:string,
     lname:string,
     email:string,
-    password:string
+    password:string,
+    city:string,
+    contactnumber:string
 
 }

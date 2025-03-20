@@ -17,8 +17,6 @@ dotenv.config();
 
 
 
-
-
 //create use db
 mongoose.connect("mongodb://localhost/japanbikehouse")
 const db=mongoose.connection
@@ -39,6 +37,7 @@ app.use(cors({
     origin: '*'
 }));
 
+app.use(express.static('src/'))
 
 
 interface  User{
@@ -92,6 +91,8 @@ let users:User[]=[];
                     fname: req_body.fname,
                     lname: req_body.lname,
                     email: req_body.email,
+                    contactnumber:req_body.contactnumber,
+                    city:req_body.city,
                     password: hash
                 })
                 // let user:Iuser|null=await  userModel.save();
@@ -208,63 +209,55 @@ let users:User[]=[];
 
 //auth
 
-    app.post('/user/auth', async (req: express.Request, res: express.Response) => {
-
-        try {
-            let request_body = req.body;
-            // email , password
-
-            let user: SchemaTypes.IUser | null = await UserModel.findOne({ email: request_body.email });
-
-            if (user) {
-                // Decrypt password and compare
-                const isMatch = await bcrypt.compare(request_body.password, user.password);
-
-                if (isMatch) {
 
 
-                    // Remove password from user object
-                    user.password = "";
+app.post('/user/auth', async (req, res) => {
+    try {
+        const request_body = req.body;
+        const user = await UserModel.findOne({ email: request_body.email });
 
-                    const expiresIn = '1w';
+        if (user) {
+            const isMatch = await bcrypt.compare(request_body.password, user.password);
 
-                    jwt.sign({ user }, process.env.SECRET as string, { expiresIn }, (err: any, token: any) => {
-                        if (err) {
+            if (isMatch) {
+                user.password = "";
 
-                            res.status(500).send(
-                                new customResponse(100, "Something Went Wrong")
-                            );
-                        } else {
-                            let res_body = {
-                                user: user,
-                                accessToken: token
-                            };
-                            console.log(res_body);
-
-                            res.status(200).send(
-                                new customResponse(200, "Access", res_body)
-                            );
-                        }
-                    });
-                } else {
-                    // Password is invalid
-                    res.status(401).send(
-                        new customResponse(401, "Invalid credentials")
-                    );
+                // Ensure the SECRET environment variable is defined
+                const secret = process.env.SECRET;
+                if (!secret) {
+                    throw new Error('SECRET is not defined in environment variables');
                 }
+
+                const expiresIn = '1w';
+                jwt.sign({ user }, secret, { expiresIn }, (err, token) => {
+                    if (err) {
+                        res.status(500).send(new customResponse(100, "Something Went Wrong"));
+                    } else {
+                        const res_body = {
+                            user: user,
+                            accessToken: token
+                        };
+                        console.log(res_body);
+
+                        res.cookie('userId', user._id, { httpOnly: true, secure: true, sameSite: 'strict' });
+                        res.cookie('token', token, { httpOnly: true, secure: true, sameSite: 'strict' });
+
+                        res.status(200).send(new customResponse(200, "Access", res_body));
+                    }
+                });
             } else {
-                // User not found
-                res.status(404).send(
-                    new customResponse(404, "User not found")
-                );
+                res.status(401).send(new customResponse(401, "Invalid credentials"));
             }
-        } catch (error) {
-            console.error("Error:", error);
-            res.status(500).send(
-                new customResponse(500, "Internal Server Error")
-            );
+        } else {
+            res.status(404).send(new customResponse(404, "User not found"));
         }
-    });
+    } catch (error) {
+        console.error("Error:", error);
+        res.status(500).send(new customResponse(500, "Internal Server Error"));
+    }
+});
+
+
 
 /////////////////////////////////article /////////////////////////////////////////////////////
 
@@ -280,26 +273,29 @@ let users:User[]=[];
     });
     const upload = multer({storage: storage});
 
-    app.post('/article', upload.fields([{name: 'img1'}, {name: 'img2'}, {name: 'img3'}, {name: 'img4'}]), async (req, res) => {
+    app.post('/article',verifyToken, upload.fields([{name: 'img1'}, {name: 'img2'}, {name: 'img3'}, {name: 'img4'}]), async (req, res:any) => {
 
         try {
+
             const req_body = req.body;
+            let user_id=res.tokenData.user._id;
+            console.log(user_id)
             const files = req.files as {
                 [fieldname: string]: Express.Multer.File[];
             };
 
 
             const imageUrl = {
-                img1: files.img1 ? files.img1[0].path : "",
-                img2: files.img2 ? files.img2[0].path : "",
-                img3: files.img3 ? files.img3[0].path : "",
-                img4: files.img4 ? files.img4[0].path : ""
+                img1: files.img1 ? files.img1[0].filename : "",
+                img2: files.img2 ? files.img2[0].filename : "",
+                img3: files.img3 ? files.img3[0].filename : "",
+                img4: files.img4 ? files.img4[0].filename : ""
             };
 
 
             const articleModel = new ArticleModel({
                 name: req_body.name,
-                contactNumber: req_body.contactNumber,
+                contactnumber: req_body.contactnumber,
                 email: req_body.email,
                 city: req_body.city,
                 millage: req_body.millage,
@@ -311,7 +307,7 @@ let users:User[]=[];
                 engineCapacity: req_body.engineCapacity,
                 description: req_body.description,
                 imageUrl: imageUrl,
-                user: new ObjectId(req_body.user)
+                user: new ObjectId(user_id)
 
             });
             await articleModel.save().then(r => {
@@ -328,6 +324,74 @@ let users:User[]=[];
             res.status(500).send('error');
         }
     });
+
+
+    //update my article
+
+app.put('/article/update', verifyToken, upload.fields([{name: 'img1'}, {name: 'img2'}, {name: 'img3'}, {name: 'img4'}]), async (req, res:any) => {
+    try {
+
+        const req_body = req.body;
+        let user_id = res.tokenData.user._id;
+        const article = await ArticleModel.find({_id: req_body._id, user: user_id})
+
+
+        console.log(user_id);
+        console.log(article);
+
+        const files = req.files as {
+            [fieldname: string]: Express.Multer.File[];
+        };
+
+        const imageUrl = {
+            img1: files.img1 ? files.img1[0].filename : "",
+            img2: files.img2 ? files.img2[0].filename : "",
+            img3: files.img3 ? files.img3[0].filename : "",
+            img4: files.img4 ? files.img4[0].filename : ""
+        };
+
+        if (article) {
+            await ArticleModel.findByIdAndUpdate({_id: req_body.id}, {
+                name: req_body.name,
+                contactnumber: req_body.contactnumber,
+                email: req_body.email,
+                city: req_body.city,
+                millage: req_body.millage,
+                price: req_body.price,
+                vehicleCondition: req_body.vehicleCondition,
+                vehicleCompany: req_body.vehicleCompany,
+                vehicleModel: req_body.vehicleModel,
+                year: req_body.year,
+                engineCapacity: req_body.engineCapacity,
+                description: req_body.description,
+                imageUrl: imageUrl,
+
+
+
+            }).then(r=>{
+                res.status(200).send(
+                    new customResponse(200,"Article Updated Sucessfully")
+                )
+            }).catch(e=>{
+                console.log(e);
+                res.status(100).send(
+                    new customResponse(100,"Something went Wrong")
+                )
+            })
+
+        }else {
+            res.status(401).send(
+                new customResponse(401,"Access Denied")
+            )
+        }
+
+
+    }catch (error){
+        res.status(100).send(error);
+    }
+})
+
+
 
 //get all articles
 
@@ -355,63 +419,66 @@ let users:User[]=[];
 
     //get Article By username
 
-    app.get('/get/article/:username',async (req:express.Request,res:express.Response) => {
+app.get('/get/article/:username', async (req: express.Request, res: express.Response) => {
+    try {
+        const req_query: any = req.query;
+        const size: number = parseInt(req_query.size);
+        const page: number = parseInt(req_query.page);
+        const username: string = req.params.username;
 
-        console.log("Helllloooo")
+        console.log(`Fetching articles for username: ${username}, size: ${size}, page: ${page}`);
 
-        try {
-            let req_query:any=req.query;
-            let size:number=req_query.size;
-            let page:number=req_query.page;
-            let username:string=req.params.username;
+        const user = await UserModel.findOne({ username: 'Nimal' });
 
-            let user= await UserModel.findOne({username:username});
+        if (!user) {
+            return res.status(404).send(new customResponse(404, "User not found"));
+        }else {
+            console.log(`User found: ${user._id}`);
+            console.log(`User found: 667db0d5f4a326fb331cf24c`);
+            console.log(`User found: 667db0d5f4a326fb331cf24c`);
 
-            //user kenek nttm
-            if (!user){
-                res.status(404).send(
-                    new  customResponse(404,"user are not found")
-                )
-            }else {
-                let articles=await ArticleModel.find({user:user._id}).limit(size).skip(size*(page-1));
+            let articles=await ArticleModel.find({ user:'667db0d5f4a326fb331cf24c'}).limit(size).skip(size*(page-1));
 
-                let documentCount=await ArticleModel.countDocuments({user:user._id});
-                let pageCount=Math.ceil(documentCount/size);
+            console.log(articles)
 
-                res.status(200).send(
-                    new customResponse(200,"Articles Are Found Sucessfully",articles,pageCount)
-                )
-            }
-        }catch (error){
-            res.status(100).send("Error")
+             let documentCount=await ArticleModel.countDocuments({ user:'667db0d5f4a326fb331cf24c'});
+             let pageCount=Math.ceil(documentCount/size);
+
+
+            res.status(200).send(
+                new customResponse(200,"Articles Are Found Sucessfully",articles,pageCount)
+            )
         }
+    }catch (error){
+        res.status(100).send("Error")
+    }
+})
 
-});
+
 
     //get my article
     app.get('/get/myarticle',verifyToken,async (req:express.Request,res:any) => {
-        console.log("arttttttttttttt")
 
         try {
 
         let req_query:any=req.query;
         let size:number=req_query.size
-
         let page:number=req_query.page;
-
-
         let user_id=res.tokenData.user._id;
 
-        let articles=await ArticleModel.find({user:user_id}).limit(size).skip(size*(page-1));
+        console.log("user id:"+user_id);
+        console.log("user id:"+page);
+        console.log("user id:"+size);
 
-        let documentCount=await ArticleModel.countDocuments({user:user_id});
+            let articles=await ArticleModel.find({ user:user_id}).limit(size).skip(size*(page-1));
 
-        let pageCount=Math.ceil(documentCount/size);
+            let documentCount=await ArticleModel.countDocuments({ user: user_id});
+            let pageCount=Math.ceil(documentCount/size);
 
         res.status(200).send(
             new customResponse(200,'Articles Are Found Sucessfully',articles,pageCount)
-        )
 
+        )
 
 
     }catch (error){
@@ -422,6 +489,38 @@ let users:User[]=[];
     })
 
 
+app.delete('/delete/myarticle/:id',verifyToken,async (req:express.Request,res:any) => {
+
+    try {
+
+        const user_id = res.tokenData.user._id;
+        const articleId: string = req.params.id;
+        console.log("User ID",user_id);
+        console.log('Article ID:', articleId);
+        const article = await ArticleModel.find({_id: articleId, user: user_id})
+
+        if (article) {
+
+            await ArticleModel.deleteOne({_id: articleId,user:user_id}).then(r => {
+                res.status(200).send(
+                    new customResponse(200, "Article is deleted successfully.")
+                )
+            } ).catch(e => {
+                res.status(100).send(
+                    new customResponse(100, "Something went wrong.")
+                )
+            })
+
+        } else {
+            res.stat(401).send(
+                new customResponse(401, "Access denied")
+            )
+        }
+
+    } catch (error) {
+        res.status(100).send("Error");
+    }
+})
 
 
 
